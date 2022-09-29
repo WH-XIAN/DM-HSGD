@@ -3,6 +3,7 @@ import os
 from sklearn.datasets import load_svmlight_file
 import numpy as np
 import time
+import random
 
 # --------------------------------------------------------------------------- #
 # Parse command line arguments (CLAs):
@@ -12,20 +13,25 @@ parser.add_argument('--data_folder', default='Data', type=str, help='path of dat
 parser.add_argument('--data_file', default='a9a.txt', type=str, help='name of data file')
 parser.add_argument('--lambda2', default=0.001, type=float, help='coefficient of regularization')
 parser.add_argument('--alpha', default=10.0, type=float, help='coefficient in regularization')
-parser.add_argument('--algorithm', default=1, type=int, help='optimization algorithm')
-parser.add_argument('--lr_x', default=0.01, type=float, help='learning rate for x')
-parser.add_argument('--lr_y', default=0.1, type=float, help='learning rate for y')
+parser.add_argument('--algorithm', default=4, type=int, help='optimization algorithm')
+parser.add_argument('--lr_x', default=0.001, type=float, help='learning rate for x in descent phase')
+parser.add_argument('--lr_x_h', default=0.1, type=float, help='learning rate for x in escaping phase')
+parser.add_argument('--lr_y', default=0.01, type=float, help='learning rate for y')
 parser.add_argument('--beta_x', default=0.01, type=float, help='weight of SGD for x')
 parser.add_argument('--beta_y', default=0.1, type=float, help='weight of SGD for y')
-parser.add_argument('--bx', default=10, type=int, help='mini batch size for x')
-parser.add_argument('--by', default=10, type=int, help='mini batch size for y')
+parser.add_argument('--bx', default=40, type=int, help='mini batch size for x')
+parser.add_argument('--by', default=40, type=int, help='mini batch size for y')
 parser.add_argument('--num_epochs', default=500, type=int, help='number of epochs to train')
-parser.add_argument('--q', default=50, type=int, help='nested loops for variance reduction')
-parser.add_argument('--K', default=20, type=int, help='nested loops for maximizer')
+parser.add_argument('--q', default=25, type=int, help='nested loops for variance reduction')
+parser.add_argument('--K', default=5, type=int, help='nested loops for maximizer')
 parser.add_argument('--init_y', default=200, type=int, help='steps to initialize y in SREDA')
-parser.add_argument('--epsilon', default=0.05, type=float, help='parameter to control stepsize in SREDA')
+parser.add_argument('--epsilon_sreda', default=0.05, type=float, help='parameter to control stepsize in SREDA')
+parser.add_argument('--epsilon_esc', default=0.0005, type=float, help='threshold to switch escaping phase')
+parser.add_argument('--esc_max', default=20, type=int, help='maximum steps of escaping phase')
+parser.add_argument('--esc_dist', default=0.01, type=float, help='average moving distance of escaping phase')
+parser.add_argument('--radius', default=0.01, type=float, help='perturbation radius')
 parser.add_argument('--print_freq', default=10, type=int, help='frequency to print train stats')
-parser.add_argument('--out_fname', default='./result_DMHSGD.csv', type=str, help='path of output file')
+parser.add_argument('--out_fname', default='result_DMHSGD.csv', type=str, help='path of output file')
 # --------------------------------------------------------------------------- #
 
 
@@ -105,13 +111,14 @@ def main():
     gx_old = np.zeros_like(x)
     vx = np.zeros_like(x)
     y_old = np.copy(y)
-    y_up = np.copy(y)
-    y_down = np.copy(y)
     gy_old = np.zeros_like(y)
     vy = np.zeros_like(y)
 
     alpha = args.alpha
     lambda2 = args.lambda2
+
+    print('eta_x: %f, eta_y: %f, eta_h: %f' % (args.lr_x, args.lr_y, args.lr_x_h))
+    print('radius: %f, D_bar: %f, T_thresh: %d, epsilon: %f' % (args.radius, args.esc_dist, args.esc_max, args.epsilon_esc))
 
     phi, grad_norm = cal_phi(data, label, x, n, lambda2, alpha)
     if not os.path.exists(args.out_fname):
@@ -121,6 +128,8 @@ def main():
     elapsed_time = 0.0
     oracle = 0
     dk = 1
+    escape = False
+    esc = 0
     for epoch in range(args.num_epochs):
         t_begin = time.time()
         if args.algorithm == 1:
@@ -208,6 +217,7 @@ def main():
                 y_old = np.copy(y)
                 y = y + args.lr_y * vy
                 y = projection(y, n)
+                # update y and estimate y^*(x)
                 for k in range(args.K):
                     idx = np.random.randint(0, n, args.bx)
                     idy = np.random.randint(0, n, args.by)
@@ -220,10 +230,36 @@ def main():
                     y = y + args.lr_y * vy
                     y = projection(y, n)
 
-            step = 2 * args.epsilon / np.sqrt(np.sum(vx * vx))
-            x_old = np.copy(x)
-            # x = x - np.min([step, 1]) * args.lr_x * vx
-            x = x - args.lr_x * vx
+            # update x
+            vx_norm = np.sqrt(np.sum(vx * vx))
+            if not escape:
+                if vx_norm >= args.epsilon_esc:
+                    x_old = np.copy(x)
+                    x = x - np.min([1, args.epsilon_sreda / vx_norm]) * args.lr_x * vx
+                else:
+                    escape = True
+                    esc = 0
+                    dist = 0
+                    # draw a perturbation from a small ball
+                    direction = np.random.rand(d)
+                    direction = direction / np.sqrt(np.sum(direction * direction))
+                    r_coeff = random.random()
+                    x_old = np.copy(x)
+                    x = x + r_coeff * args.radius * direction
+            else:
+                esc += 1
+                aug = args.lr_x_h * args.lr_x_h * vx_norm * vx_norm
+                if dist + aug > esc * args.esc_dist:
+                    lr_pull = np.sqrt((args.esc_dist - dist) / (vx_norm * vx_norm))
+                    x_old = np.copy(x)
+                    x = x - lr_pull * vx
+                    escape = False
+                else:
+                    dist = dist + aug
+                    x_old = np.copy(x)
+                    x = x - args.lr_x_h * vx
+                    if esc >= args.esc_max:
+                        escape = False
 
         t_end = time.time()
         elapsed_time += (t_end - t_begin)
