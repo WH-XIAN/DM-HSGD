@@ -31,7 +31,7 @@ parser.add_argument('--esc_max', default=20, type=int, help='maximum steps of es
 parser.add_argument('--esc_dist', default=0.01, type=float, help='average moving distance of escaping phase')
 parser.add_argument('--radius', default=0.01, type=float, help='perturbation radius')
 parser.add_argument('--print_freq', default=10, type=int, help='frequency to print train stats')
-parser.add_argument('--out_fname', default='result_DMHSGD.csv', type=str, help='path of output file')
+parser.add_argument('--out_fname', default='PMHSGD.csv', type=str, help='path of output file')
 # --------------------------------------------------------------------------- #
 
 
@@ -123,7 +123,8 @@ def main():
     phi, grad_norm = cal_phi(data, label, x, n, lambda2, alpha)
     if not os.path.exists(args.out_fname):
         with open(args.out_fname, 'w') as f:
-            print('{ep:d},{t:.3f},{ifo:d},{phi:.5f},{grad:.5f}'.format(ep=0, t=0, ifo=0, phi=phi, grad=grad_norm), file=f)
+            print('Epoch,Time,IFO,Phi,Grad_Norm', file=f)
+            print('{ep:d},{t:.3f},{ifo:.3f},{phi:.5f},{grad:.5f}'.format(ep=0, t=0, ifo=0, phi=phi, grad=grad_norm), file=f)
 
     elapsed_time = 0.0
     oracle = 0
@@ -233,9 +234,10 @@ def main():
             # update x
             vx_norm = np.sqrt(np.sum(vx * vx))
             if not escape:
-                if vx_norm >= args.epsilon_esc:
+                if vx_norm > args.epsilon_esc:
                     x_old = np.copy(x)
                     x = x - np.min([1, args.epsilon_sreda / vx_norm]) * args.lr_x * vx
+                    # x = x - (args.lr_x / vx_norm) * vx
                 else:
                     escape = True
                     esc = 0
@@ -266,8 +268,8 @@ def main():
         if (epoch + 1) % args.print_freq == 0:
             phi, grad_norm = cal_phi(data, label, x, n, lambda2, alpha)
             with open(args.out_fname, '+a') as f:
-                print('{ep:d},{t:.3f},{ifo:d},{phi:.5f},{grad:.5f}'
-                      .format(ep=epoch + 1, t=elapsed_time, ifo=oracle, phi=float(phi), grad=grad_norm), file=f)
+                print('{ep:d},{t:.3f},{ifo:.3f},{phi:.5f},{grad:.5f}'
+                      .format(ep=epoch + 1, t=elapsed_time, ifo=oracle/n, phi=float(phi), grad=grad_norm), file=f)
 
 
 if __name__ == '__main__':
