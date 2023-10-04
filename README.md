@@ -9,5 +9,5 @@ pip install -r requirement.txt
 
 ## Running
 ```
-python
+python Decentralized_Minimax.py
 ```
